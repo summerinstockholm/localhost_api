@@ -1,0 +1,133 @@
+Нагружаем локальное API.
+1. В папке где будет лежать наше api выполнить:
+npm init -y
+В результате получаем package.json
+2. В этой же папке устанавливаем json-server:
+npm install json-server
+3. В рабочей папке создаем файл db.json.
+В него закидываем для примера что-то типа:
+{
+    "users":[
+        {
+            "id": 1,
+            "name": "David",
+            "age": 30
+        },
+        {
+            "id": 2,
+            "name": "John",
+            "age": 40
+        }
+    ]
+}
+и сохраняем
+4. В package.json (созданный в первом пункте) добавляем скрипт для старта json-сервера:
+"scripts":{
+    "start": "json-server db.json"
+  }
+5. Сохраняем и запускаем в терминале:
+npm start
+Должно подняться на 3000 порту локалхоста:
+
+> localhost_api@1.0.0 start D:\projects\performance_testing\localhost_api
+> json-server db.json
+
+
+  \{^_^}/ hi!
+
+  Loading db.json
+  Done
+
+  Resources
+  http://localhost:3000/users
+
+  Home
+  http://localhost:3000
+
+  Type s + enter at any time to create a snapshot of the database
+При открытии http://localhost:3000/users в терминале логируется запрос - GET /users 200 31.448 ms - 115.
+6. Открываем Jmeter и создаем тестплан - LOCAL_API_TEST, затем тредгрупп - THREAD_GROUP_LOCAL_API, затем семплер - HTTP Request.
+В семплере ставим галку рядом с Redirect Automatically, в Server Name or IP указываем - localhost, в Port Number - 3000, в Path - /users.
+Затем к реквесту добавляем Listener - View Result Tree.
+Запускаем тестплан, при запуске гет запрос в View Result Tree отображается зеленым цветом, статус код респонса 200 - OK. В терминале новые запросы прологировались.
+В респонс дата (во View Result Tree) получена инфа о юзерах:
+{
+    "users":[
+        {
+            "id": 1,
+            "name": "David",
+            "age": 30
+        },
+        {
+            "id": 2,
+            "name": "John",
+            "age": 40
+        }
+    ]
+}
+Но то было лишь 1 поток, далее планомерно увеличиваем количество тредов (юзеров). Например 25. 
+7. Добавление пользователя POST методом.
+Добавляем новый семплер http request и выбираем в нем метод POST. Все поля заполняем как в пункте 6 (ставим галку рядом с Redirect Automatically, в Server Name or IP указываем - localhost, в Port Number - 3000, в Path - /users).
+Затем сразу к реквесту добавляем Listener - View Result Tree.
+В запросе выбираем Body Data и вставляем что-то вроде:
+{
+	"id": 123,
+	"name": "Alice",
+	"age": 35
+}
+id, name, age - их значения могут быть произвольными.
+8. Добавляем HTTP Header manager для принудительного прописывания типа файла json. В нем в таблицу добавляем что content-type имеет значение application/json.
+И запускаем реквест. Нюанс тут в том что если вы попытаетесь создать пользователя в 25 потоков, то отработает только самый первый, все последующие будут ругатся на дубликаты (нужен уникальный id).
+Решение - счетчики в jmeter. В конфиг элемент добавить Counter.
+В нем заполнить:
+Starting Value - 200 (начальное значение счетчика)
+Increment - 1 (инкремент)
+Exported Variable Name - counter_id (название переменной).
+После заполнения идем обратно в запрос а точнее в Body Data и заменяем значение 123 у id на ${counter_id}, должно получится вот так:
+{
+	"id": ${counter_id},
+	"name": "Alice",
+	"age": 35
+}
+Для возраста например можно сделать тоже самое:
+Создать счетчик -> В нем Exported Variable Name - counter_age -> Starting Value - 18 -> Increment - 1. Заменяем в Body Data в age: 35 на ${counter_age}. Получится вот так:
+{
+	"id": ${counter_id},
+	"name": "Alice",
+	"age": ${counter_age}
+}
+Или можно использовать функцию которая бы возвращала рандомный возраст от 18 до 99 лет. При этом важно чтобы каждый поток генерировал свой рандомный возраст. Для этих целей лучше использовать Random Variable (Add->Config Element->Random Variable).
+Добавляем Random Variable и указываем в нем следующие параметры:
+имя переменной для дальнейшего обращения (Variable Name)
+формат (Output Format) (значение формата может состоять только из нулей, указывающих разрядность, или же с содержанием символов как перед нулями так и после)
+минимальное значение (Minimum Value)
+максимальное значение (Maximum Value)
+основу для генерации рандомных значений, которой по умолчанию является текущее время в миллисекундах ( Seed for Rundom function)
+Параметр "Per Thread (User)": если значение параметра False, то генератор общий для всех Thread Group, если значение True, то генератор свой для каждого пользователя.
+Можно и другим путем создать рандомный возраст:
+${__Random(1,100,)}, где 1 - начало, 100 конец. Такая конструкция будет генерить разные значения для нескольких Thread если не запихивать в User Defined Variables, а использовать напрямую в реквесте. 
+Путеводитель по функциями тут:
+Tools->Function Helper Dialog
+Для имени тоже можно использовать рандом:
+${__RandomString(7,abcdefghшjklmnopqrstuvwxyz,)}
+Должно получится вот так:
+{
+	"id": ${counter_id},
+	"name": "${__RandomString(7,abcdefghшjklmnopqrstuvwxyz,)}",
+	"age": ${__Random(1,100,)}
+}
+При последующем запуске важно учесть что у нас остался счетчик для id, поэтому важно в его свойствах выставить новое стартовое число, так как до этого уже создались записи с id от 200. Запускаем.
+9. Создаем http request для метода PUT.
+Конкретный ресурс лежит по эндпоинту например http://localhost:3000/users/1 или http://localhost:3000/users/2 где цифра 1 или 2 - айди ресурса.
+Будем отправлять PUT запрос к юзеру с айди - 1. Соотвественно в Path указать /users/1 также ставим галку рядом с Redirect Automatically, в Server Name or IP указываем - localhost, в Port Number - 3000.
+К запросу добавляем View Result Tree и HTTP Header Manager (в нем также указать что content-type - application/json).
+В body data вставляем:
+{
+	"id": 1,
+	"name": "Nataly",
+	"age": 35
+}
+Всё должно отработать успешно.
+10. Удаление через метод DELETE.
+Будем отправлять DELETE запрос к юзеру с айди - 201. Удалять конкретный ресурс. Соотвественно в Path указать /users/201 также ставим галку рядом с Redirect Automatically, в Server Name or IP указываем - localhost, в Port Number - 3000.
+К запросу добавляем View Result Tree и HTTP Header Manager (в нем также указать что content-type - application/json). Body Data оставляем пустым.
